@@ -1,0 +1,96 @@
+import pandas as pd
+import numpy as np
+df = pd.read_pickle("данные для Python.pickle")  # compression будет определён автоматически
+
+from dateutil.relativedelta import relativedelta
+
+
+def calc(group: pd.DataFrame) -> pd.Timestamp:
+
+    # сортируем и превращаем в кортеж по которому можно итерироваться
+    events = group.sort_values("created_at")[["value", "created_at"]].to_records(index=False)
+
+# получаем первое включение услуги у компании first_on
+    first_on = None
+    for value, timestep in events:
+        if value == 1:
+            first_on = timestep
+            break
+        # если компания так и не включила вернем nat
+    if first_on is None:
+        return pd.NaT 
+
+# Для каждой компании пройдемся по интервалам работы и будем включать или выключать статус active в зависимости от value
+
+    active = False
+    intervals = []
+    cur_time = None
+
+    for val, ts in events:
+        if ts < first_on:
+            # события до первого включения игнорируем
+            continue
+
+        if cur_time is None:
+            cur_time = first_on
+            active = True  
+
+        if ts == first_on:
+            # это по факту первое включение 
+            continue
+
+# В список интервалов записывается start, end, is_active начиная с first_on
+        intervals.append((cur_time, ts, active))
+        # переключаем статус по событию
+        active = (val == 1)
+        cur_time = ts
+    
+    first_on = pd.Timestamp(first_on)   # привели к Timestamp
+
+    # Если у компании последняя запись это value = 1, то прибавляем к ней 10+ месяцев, чтобы получить дату закрытия
+    period_end = first_on + np.timedelta64(330, 'D')
+    intervals.append((cur_time, period_end, active))
+
+    # Теперь итеративно идем по интервалам и от первого включения считаем сколько полных месяцев
+    steps_needed = 10
+    steps_done = 0
+    k = 1
+    # пройдём по активным интервалам и засчитаем все тики, которые туда попадают
+    for start, end, is_active in intervals:
+        start = pd.Timestamp(start)
+        end = pd.Timestamp(end)
+
+        if not is_active:
+            continue
+        # print(f"start {start}, end {end}, is_active {is_active}")
+        # берём последовательность контрольных дат first_on + k месяцев, которые >= start и < end
+        while steps_done < steps_needed:
+            step = first_on + relativedelta(months=k)
+            # print(f"step {step}")
+
+            if step >= end:
+                break
+            if step >= start:
+                steps_done += 1
+                if steps_done == steps_needed:
+                    return step
+            k += 1
+
+        if steps_done == steps_needed:
+            break
+
+        if steps_done < steps_needed:
+            while first_on + relativedelta(months=k) < start:
+                k += 1
+        # print(step, steps_done)
+
+    return pd.NaT
+
+# группируем по компаниям и каждой для каждой компании считаем дату оплаты подписки
+dates = (
+    df.groupby("company_id", as_index=False)
+      .apply(calc)
+      .rename(columns={None: "billing_start"})
+)
+
+dates.to_pickle("billing_start.pkl", protocol=4)

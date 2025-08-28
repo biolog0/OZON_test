@@ -1,0 +1,29 @@
+     
+-- В течение одного дня компания может совершить несколько заказов, подготавливаем агрегат с суммой заказов за день
+WITH agg_day_sum AS ( 
+    SELECT
+        CompanyID as company_id,
+        FactDate as fact_date,   
+        SUM(Qty) AS day_qty  --складываем все заказы за день
+    FROM sales
+    GROUP BY 1, 2
+),
+-- считаем накопительную сумму с шагом в день по продавцу
+cum_sum AS ( 
+    SELECT
+        company_id,
+        fact_date,
+        SUM(day_qty) OVER (PARTITION BY company_id ORDER BY fact_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumsum_qty 
+
+--сортируем по дате количество заказов в окне по компании
+    FROM agg_day_sum
+)
+
+-- даже если в день было совершено в сумме с накоплением больше 1 или 10 заказов, то мы считаем этот день 
+SELECT                        
+    company_id,
+    MIN(CASE WHEN cumsum_qty >= 1  THEN fact_date END)  AS firstSale,
+    MIN(CASE WHEN cumsum_qty >= 10 THEN fact_date END)  AS tenthSale
+FROM cum_sum
+GROUP BY company_id
+ORDER BY company_id
